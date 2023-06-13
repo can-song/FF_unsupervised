@@ -1,6 +1,7 @@
 import torch
 import torchvision
 from torch import nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -25,10 +26,33 @@ def goodness_score(pos_acts, neg_acts, threshold=2):
     quantity but without the threshold subtraction
     """
 
-    pos_goodness = -torch.sum(torch.pow(pos_acts, 2)) + threshold
-    neg_goodness = torch.sum(torch.pow(neg_acts, 2)) - threshold
-    return torch.add(pos_goodness, neg_goodness)
-
+    # pos_goodness = -torch.sum(torch.pow(pos_acts, 2)) + threshold
+    # neg_goodness = torch.sum(torch.pow(neg_acts, 2)) - threshold
+    # return torch.add(pos_goodness, neg_goodness)
+    # return -torch.log(torch.pow(pos_acts-neg_acts, 2)+1e-3).sum()
+    # return -torch.sum(pos_acts * (torch.log(pos_acts+1e-3) - torch.log(neg_acts+1e-3)))
+    # return - torch.sum(torch.exp(pos_acts)*(pos_acts - neg_acts)) \
+    #        - torch.sum(torch.exp(neg_acts)*(neg_acts - pos_acts))
+    
+    # return -torch.sum(torch.exp(-pos_acts)*(neg_acts-pos_acts)) \
+        #    -torch.sum(torch.exp(-neg_acts)*(pos_acts-neg_acts))
+    # pos_acts = torch.log(torch.exp(pos_acts)-1+1e-3)
+    # neg_acts = torch.log(torch.exp(neg_acts)-1+1e-3)
+    # return torch.sum(pos_acts.pow(2) + neg_acts.pow(2) - (pos_acts-neg_acts).abs() * 2)
+    # return torch.sum(0.5*pos_acts.pow(2) + 0.5*neg_acts.pow(2) - torch.log(torch.pow(pos_acts-neg_acts, 2)+1e-12))
+    # return torch.sum(0.5*(pos_acts-1).pow(2) + 0.5*(neg_acts-1).pow(2) - torch.log(torch.pow(pos_acts-neg_acts, 2)+1e-12))
+    # *return torch.sum(0.5*F.relu(pos_acts-0.5) + 0.5*F.relu(neg_acts-0.5) - torch.log(torch.pow(pos_acts-neg_acts, 2)+1e-12))
+    # return pos_acts.pow(2).sum() + neg_acts.pow(2).sum() - torch.log(torch.pow(pos_acts-neg_acts, 2).sum())
+    # return pos_acts.pow(2).mean() + neg_acts.pow(2).mean() - torch.log(torch.pow(pos_acts-neg_acts, 2).mean())
+    # return pos_acts.abs().mean() + neg_acts.abs().mean() - torch.log(torch.pow(pos_acts-neg_acts, 2).mean())
+    # f = lambda x: x.abs() - torch.log(torch.pow(x, 2)+1e-12) - 1
+    # return torch.sum(f(pos_acts-neg_acts))
+    # return torch.sum(f(pos_acts) + f(neg_acts) + f(pos_acts-neg_acts))
+    # g = lambda x: torch.log((x-x[:, torch.randperm(x.shape[1])]).pow(2) + 1e-12)
+    # return torch.sum(f(pos_acts) + f(neg_acts))# - torch.log((pos_acts-neg_acts).pow(2)+1e-12) - g(pos_acts) - g(neg_acts))
+    beta = 3 # 3
+    return torch.sum(pos_acts.pow(2) + neg_acts.pow(2) - beta*beta*torch.log((pos_acts-neg_acts).pow(2)+1e-12) - beta)
+    # return torch.sum((pos_acts-neg_acts).pow(2) - torch.log((pos_acts-neg_acts).pow(2)+1e-12)) - 1
 
 def get_metrics(preds, labels):
     acc = accuracy_score(labels, preds)
@@ -43,6 +67,11 @@ class FF_Layer(nn.Linear):
         self.goodness = goodness_score
         self.to(device)
         self.ln_layer = nn.LayerNorm(normalized_shape=[1, out_features]).to(device)
+        # self.act = nn.Sigmoid()
+        # self.act = nn.Softmax(dim=1)
+        # self.act = nn.LogSigmoid()
+        # self.act = nn.ReLU()
+        self.act = nn.Softplus()
 
     def ff_train(self, pos_acts, neg_acts):
         """
@@ -61,27 +90,41 @@ class FF_Layer(nn.Linear):
 
     def forward(self, input):
         input = super().forward(input.detach())
+        # input = self.ln_layer(input.detach())
         input = self.ln_layer(input)
+        input = self.act(input)
         return input
 
 
 class Unsupervised_FF(nn.Module):
-    def __init__(self, n_layers: int = 4, n_neurons=2000, input_size: int = 28 * 28, n_epochs: int = 100,
+    def __init__(self, n_layers: int = 4, n_neurons=500, input_size: int = 28 * 28, n_epochs: int = 100,
                  bias: bool = True, n_classes: int = 10, n_hid_to_log: int = 3, device=torch.device("cuda:0")):
         super().__init__()
         self.n_hid_to_log = n_hid_to_log
         self.n_epochs = n_epochs
         self.device = device
 
-        ff_layers = [
-            FF_Layer(in_features=input_size if idx == 0 else n_neurons,
-                     out_features=n_neurons,
-                     n_epochs=n_epochs,
-                     bias=bias,
-                     device=device) for idx in range(n_layers)]
+        # ff_layers = [
+        #     FF_Layer(in_features=input_size if idx == 0 else n_neurons,
+        #              out_features=n_neurons,
+        #              n_epochs=n_epochs,
+        #              bias=bias,
+        #              device=device) for idx in range(n_layers)]
+        ff_layers = nn.ModuleList([
+            FF_Layer(28*28, 512, n_epochs, bias, device),
+            FF_Layer(512, 256, n_epochs, bias, device),
+            # FF_Layer(512, 512, n_epochs, bias, device),
+            FF_Layer(256, 128, n_epochs, bias, device),
+            # FF_Layer(128, 64, n_epochs, bias, device),
+            # FF_Layer(64, 32, n_epochs, bias, device),
+            # FF_Layer(32, 16, n_epochs, bias, device),
+            # FF_Layer(16, 8, n_epochs, bias, device),
+            # FF_Layer(8, 4, n_epochs, bias, device),
+        ])
 
+        # 0.93115, 0.9271
         self.ff_layers = ff_layers
-        self.last_layer = nn.Linear(in_features=n_neurons * n_hid_to_log, out_features=n_classes, bias=bias)
+        self.last_layer = nn.Linear(in_features=128, out_features=n_classes, bias=bias)
         self.to(device)
         self.opt = torch.optim.Adam(self.last_layer.parameters())
         self.loss = torch.nn.CrossEntropyLoss(reduction="mean")
@@ -89,12 +132,27 @@ class Unsupervised_FF(nn.Module):
     def train_ff_layers(self, pos_dataloader, neg_dataloader):
         outer_tqdm = tqdm(range(self.n_epochs), desc="Training FF Layers", position=0)
         for epoch in outer_tqdm:
+            batch_size = pos_dataloader.batch_size
+            pos_dataset = torchvision.datasets.MNIST(root='./', download=False, transform=transform, train=True)
+            pos_dataloader = DataLoader(pos_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+            ff = False
+            if ff:
+                neg_dataset = torch.load('transformed_dataset.pt')
+                # Create the data loader
+                neg_dataloader = DataLoader(neg_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+            else:
+                neg_dataloader = DataLoader(pos_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
             inner_tqdm = tqdm(zip(pos_dataloader, neg_dataloader), desc=f"Training FF Layers | Epoch {epoch}",
                               leave=False, position=1)
             for pos_data, neg_imgs in inner_tqdm:
                 pos_imgs, _ = pos_data
+                if ff:
+                    neg_imgs = neg_imgs
+                else:
+                    neg_imgs, _ = neg_imgs
                 pos_acts = torch.reshape(pos_imgs, (pos_imgs.shape[0], 1, -1)).to(self.device)
                 neg_acts = torch.reshape(neg_imgs, (neg_imgs.shape[0], 1, -1)).to(self.device)
+                # neg_acts = pos_acts[torch.randperm(pos_acts.shape[0])]
 
                 for idx, layer in enumerate(self.ff_layers):
                     pos_acts = layer(pos_acts)
@@ -124,13 +182,14 @@ class Unsupervised_FF(nn.Module):
     def forward(self, image: torch.Tensor):
         image = image.to(self.device)
         image = torch.reshape(image, (image.shape[0], 1, -1))
-        concat_output = []
+        # concat_output = []
         for idx, layer in enumerate(self.ff_layers):
             image = layer(image)
-            if idx > len(self.ff_layers) - self.n_hid_to_log - 1:
-                concat_output.append(image)
-        concat_output = torch.concat(concat_output, 2)
-        logits = self.last_layer(concat_output)
+            # if idx > len(self.ff_layers) - self.n_hid_to_log - 1:
+                # concat_output.append(image)
+        # concat_output = torch.concat(concat_output, 2)
+        # logits = self.last_layer(concat_output)
+        logits = self.last_layer(image)
         return logits.squeeze()
 
     def evaluate(self, dataloader: DataLoader, dataset_type: str = "train"):
@@ -169,7 +228,7 @@ def plot_loss(loss):
 
 
 if __name__ == '__main__':
-    prepare_data()
+    # prepare_data()
 
     # Load the MNIST dataset
     transform = torchvision.transforms.Compose([
@@ -178,12 +237,13 @@ if __name__ == '__main__':
     pos_dataset = torchvision.datasets.MNIST(root='./', download=False, transform=transform, train=True)
     # pos_dataset = Subset(pos_dataset, list(range(1000)))
     # Create the data loader
-    pos_dataloader = DataLoader(pos_dataset, batch_size=64, shuffle=True, num_workers=4)
+    batch_size = 64
+    pos_dataloader = DataLoader(pos_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
 
     # Load the transformed images
-    neg_dataset = torch.load('transformed_dataset.pt')
+    # neg_dataset = torch.load('transformed_dataset.pt')
     # Create the data loader
-    neg_dataloader = DataLoader(neg_dataset, batch_size=64, shuffle=True, num_workers=4)
+    neg_dataloader = DataLoader(pos_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
 
     # Load the test images
     test_dataset = torchvision.datasets.MNIST(root='./', train=False, download=False, transform=transform)
@@ -191,7 +251,7 @@ if __name__ == '__main__':
     test_dataloader = DataLoader(test_dataset, batch_size=64, shuffle=True, num_workers=4)
 
     device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-    unsupervised_ff = Unsupervised_FF(device=device, n_epochs=2)
+    unsupervised_ff = Unsupervised_FF(device=device, n_epochs=20)
 
     loss = train(unsupervised_ff, pos_dataloader, neg_dataloader)
 
