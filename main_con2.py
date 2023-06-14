@@ -7,7 +7,11 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from utils import prepare_data
 from sklearn.metrics import accuracy_score
+from torch.utils.tensorboard import SummaryWriter
 
+import os
+os.system('rm -rf ./logs')
+writer = SummaryWriter('./logs')
 
 def goodness_score(pos_acts, neg_acts, threshold=2):
     """
@@ -50,9 +54,11 @@ def goodness_score(pos_acts, neg_acts, threshold=2):
     # return torch.sum(f(pos_acts) + f(neg_acts) + f(pos_acts-neg_acts))
     # g = lambda x: torch.log((x-x[:, torch.randperm(x.shape[1])]).pow(2) + 1e-12)
     # return torch.sum(f(pos_acts) + f(neg_acts))# - torch.log((pos_acts-neg_acts).pow(2)+1e-12) - g(pos_acts) - g(neg_acts))
-    beta = 2 # 3
-    return torch.sum(pos_acts.pow(2) + neg_acts.pow(2) - beta*beta*torch.log((pos_acts-neg_acts).pow(2)+1e-12) - beta)
+    # beta = 2 # 3
+    # return torch.sum(pos_acts.pow(2) + neg_acts.pow(2) - beta*beta*torch.log((pos_acts-neg_acts).pow(2)+1e-12) - beta)
     # return torch.sum((pos_acts-neg_acts).pow(2) - torch.log((pos_acts-neg_acts).pow(2)+1e-12)) - 1
+    
+    return torch.sum(pos_acts.abs() + neg_acts.abs() - torch.log((pos_acts-neg_acts).pow(2)+1e-12))
 
 def get_metrics(preds, labels):
     acc = accuracy_score(labels, preds)
@@ -63,16 +69,17 @@ class FF_Layer(nn.Linear):
     def __init__(self, in_features: int, out_features: int, n_epochs: int, bias: bool, device):
         super().__init__(in_features, out_features, bias=bias)
         self.n_epochs = n_epochs
-        self.opt = torch.optim.Adam(self.parameters())
         self.goodness = goodness_score
-        self.to(device)
         self.ln_layer = nn.LayerNorm(normalized_shape=[1, out_features]).to(device)
         # self.act = nn.Sigmoid()
         # self.act = nn.Softmax(dim=1)
         # self.act = nn.LogSigmoid()
         # self.act = nn.ReLU()
-        # self.act = nn.Softplus()
-        self.act = nn.LeakyReLU(0.2)
+        self.act = nn.Softplus()
+        # self.act = nn.LeakyReLU(0.2)
+
+        self.to(device)
+        self.opt = torch.optim.Adam(self.parameters())
 
     def ff_train(self, pos_acts, neg_acts):
         """
@@ -93,8 +100,8 @@ class FF_Layer(nn.Linear):
         # input = super().forward(input.detach())
         # input = self.ln_layer(input.detach())
         input = super().forward(input)
-        input = self.ln_layer(input)
-        # input = self.act(input)
+        # input = self.ln_layer(input)
+        input = self.act(input)
         return input
 
 
@@ -128,9 +135,16 @@ class Unsupervised_FF(nn.Module):
         models = []
         model = nn.Sequential()
         for idx, layer in enumerate(ff_layers):
+            optimizer = torch.optim.Adam(layer.parameters())
+            # optimizer.add_param_group({'params': layer.parameters(), 'lr':1e-3})
+            optimizer.add_param_group({'params': model.parameters(), 'lr':1e-4})
+            # print(optimizer.param_groups)
             model.append(layer)
             models.append(model)
-            optimizers.append(torch.optim.Adam(model.parameters()))
+            optimizers.append(optimizer)
+            
+        self.models = models
+        self.optimizers = optimizers
 
         # 0.93115, 0.9271
         self.ff_layers = ff_layers
@@ -164,12 +178,18 @@ class Unsupervised_FF(nn.Module):
                 neg_acts = torch.reshape(neg_imgs, (neg_imgs.shape[0], 1, -1)).to(self.device)
                 # neg_acts = pos_acts[torch.randperm(pos_acts.shape[0])]
 
-                for idx, layer in enumerate(self.ff_layers):
-                    pos_acts = pos_acts.detach()
-                    neg_acts = neg_acts.detach()
-                    pos_acts = layer(pos_acts)
-                    neg_acts = layer(neg_acts)
-                    layer.ff_train(pos_acts, neg_acts)
+                for model, opt in zip(self.models, self.optimizers):
+                    opt.zero_grad()
+                    goodness = goodness_score(model(pos_acts), model(neg_acts))
+                    goodness.backward()
+                    opt.step()
+
+                # for idx, layer in enumerate(self.ff_layers):
+                #     pos_acts = pos_acts.detach()
+                #     neg_acts = neg_acts.detach()
+                #     pos_acts = layer(pos_acts)
+                #     neg_acts = layer(neg_acts)
+                #     layer.ff_train(pos_acts, neg_acts)
 
     def train_last_layer(self, dataloader: DataLoader):
         num_examples = len(dataloader)
@@ -187,6 +207,7 @@ class Unsupervised_FF(nn.Module):
                 epoch_loss += loss
                 loss.backward()
                 self.opt.step()
+            writer.add_scalar("Loss/train", epoch_loss / num_examples, epoch)
             loss_list.append(epoch_loss / num_examples)
             # Update progress bar with current loss
         return [l.detach().cpu().numpy() for l in loss_list]
@@ -267,7 +288,7 @@ if __name__ == '__main__':
 
     loss = train(unsupervised_ff, pos_dataloader, neg_dataloader)
 
-    plot_loss(loss)
+    # plot_loss(loss)
 
     unsupervised_ff.evaluate(pos_dataloader, dataset_type="Train")
     unsupervised_ff.evaluate(test_dataloader, dataset_type="Test")

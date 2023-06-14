@@ -10,7 +10,7 @@ from sklearn.metrics import accuracy_score
 import random
 
 
-def goodness_score(pos_acts, neg_acts, threshold=2):
+def goodness_score(pos_acts, neg_acts, mix_acts, threshold=2):
     """
     Compute the goodness score for a given set of positive and negative activations.
 
@@ -61,7 +61,9 @@ def goodness_score(pos_acts, neg_acts, threshold=2):
     # return -torch.log((pos_acts-neg_acts).pow(2)+1e-12).sum()
     # diff = -(pos_acts-neg_acts).pow(2) * 0.5
     # return torch.sum(pos_acts.abs() + neg_acts.abs() - (pos_acts-neg_acts).pow(2) * 0.5)
-    return torch.sum(pos_acts + neg_acts - 2*torch.log((pos_acts-neg_acts).pow(2)+1e-12))
+    # return torch.sum(pos_acts + neg_acts - 2*torch.log((pos_acts-neg_acts).pow(2)+1e-12))
+    # return torch.sum(mix_acts - torch.log((pos_acts-neg_acts).pow(2)+1e-12))
+    return torch.sum(mix_acts - torch.log((pos_acts-mix_acts).pow(2)+1e-12))
     # return torch.sum(torch.log(pos_acts+1e-12)+torch.log(neg_acts+1e-12) - torch.log((pos_acts-neg_acts).pow(2)+1e-12))
     
     
@@ -90,7 +92,7 @@ class FF_Layer(nn.Linear):
         self.to(device)
         self.opt = torch.optim.Adam(self.parameters())
 
-    def ff_train(self, pos_acts, neg_acts):
+    def ff_train(self, pos_acts, neg_acts, mix_acts):
         """
         Train the layer using positive and negative activations.
 
@@ -101,7 +103,7 @@ class FF_Layer(nn.Linear):
         """
 
         self.opt.zero_grad()
-        goodness = self.goodness(pos_acts, neg_acts)
+        goodness = self.goodness(pos_acts, neg_acts, mix_acts)
         goodness.backward()
         self.opt.step()
 
@@ -172,9 +174,12 @@ class Unsupervised_FF(nn.Module):
                 # neg_acts = pos_acts[torch.randperm(pos_acts.shape[0])]
 
                 for idx, layer in enumerate(self.ff_layers):
+                    alpha = torch.rand(pos_acts.shape[0]).to(self.device)[:, None, None]
+                    mix_acts = alpha * pos_acts + (1 - alpha) * neg_acts
                     pos_acts = layer(pos_acts)
                     neg_acts = layer(neg_acts)
-                    layer.ff_train(pos_acts, neg_acts)
+                    mix_acts = layer(mix_acts)
+                    layer.ff_train(pos_acts, neg_acts, mix_acts)
             if epoch % 100 == 0:
                     torch.save(self.state_dict(), f"mnist_{epoch}.pt")
 
