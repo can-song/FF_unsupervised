@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from utils import prepare_data
 from sklearn.metrics import accuracy_score
 import random
+import numpy as np
 
 
 def goodness_score(pos_acts, neg_acts, threshold=2):
@@ -61,7 +62,20 @@ def goodness_score(pos_acts, neg_acts, threshold=2):
     # return -torch.log((pos_acts-neg_acts).pow(2)+1e-12).sum()
     # diff = -(pos_acts-neg_acts).pow(2) * 0.5
     # return torch.sum(pos_acts.abs() + neg_acts.abs() - (pos_acts-neg_acts).pow(2) * 0.5)
-    return torch.sum(pos_acts + neg_acts - 2*torch.log((pos_acts-neg_acts).pow(2)+1e-12))
+    # return torch.sum(pos_acts - 2*torch.log((pos_acts-torch.mean(pos_acts, dim=0, keepdim=True)).pow(2)+1e-12))
+
+    # return pos_acts.mean() + torch.log(pos_acts.pow(2).mean()+1e-12) + \
+    #        neg_acts.mean() + torch.log(neg_acts.pow(2).mean()+1e-12) + \
+    #        torch.log(torch.pow(pos_acts-neg_acts, 2) + 1e-12).mean()
+    # return torch.sum(pos_acts + neg_acts - 2*torch.log((pos_acts-neg_acts).pow(2)+1e-12))
+    tao = 0.2
+    return torch.sum(torch.log(np.exp(1/tao)+torch.exp(pos_acts/tao)) + 
+                     torch.log(np.exp(1/tao)+torch.exp(neg_acts/tao)) - 
+                     (pos_acts-neg_acts).abs()+1e-12)
+
+    # pos_acts = pos_acts / (pos_acts.mean(dim=2, keepdim=True)+1e-12)
+    # neg_acts = neg_acts / (neg_acts.mean(dim=2, keepdim=True)+1e-12)
+    # return -torch.sum((pos_acts-neg_acts).pow(2))
     # return torch.sum(torch.log(pos_acts+1e-12)+torch.log(neg_acts+1e-12) - torch.log((pos_acts-neg_acts).pow(2)+1e-12))
     
     
@@ -72,16 +86,31 @@ def get_metrics(preds, labels):
     acc = accuracy_score(labels, preds)
     return dict(accuracy_score=acc)
 
+class FeatureNorm(nn.Module):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        
+    def forward(self, x):
+        x = x.pow(2)
+        M = x.mean(-1, keepdim=True)
+        x = x / (M+1e-6)
+        return x
+        
+
 
 class FF_Layer(nn.Linear):
     def __init__(self, in_features: int, out_features: int, n_epochs: int, bias: bool, device):
         super().__init__(in_features, out_features, bias=bias)
         self.n_epochs = n_epochs
         self.goodness = goodness_score
+        
+        # self.dropout = nn.Dropout(p=0.25).to(device)
         # self.ln_layer = nn.LayerNorm(normalized_shape=[1, out_features]).to(device)
+        # self.lrn_layer = nn.LocalResponseNorm(size=5, alpha=0.0001, beta=0.75, k=1.0).to(device)
+        # self.fn = FeatureNorm()
         # self.bn_layer = nn.BatchNorm1d(out_features)
         # self.act = nn.Sigmoid()
-        # self.act = nn.Softmax(dim=1)
+        # self.act = nn.Softmax(dim=-1)
         # self.act = nn.LogSigmoid()
         # self.act = nn.ReLU()
         self.act = nn.Softplus()
@@ -106,11 +135,14 @@ class FF_Layer(nn.Linear):
         self.opt.step()
 
     def forward(self, input):
+        # input = self.dropout(input)
         input = super().forward(input.detach())
         # input = self.ln_layer(input.detach())
         # input = self.ln_layer(input)
+        # input = self.lrn_layer(input.permute(0, 2, 1)).permute(0, 2, 1)
         # input = self.bn_layer(input.squeeze(1))[:,None]
-        input = self.act(input)
+        # input = self.act(input)
+        # input = self.fn(input)
         return input
 
 
@@ -172,6 +204,8 @@ class Unsupervised_FF(nn.Module):
                 # neg_acts = pos_acts[torch.randperm(pos_acts.shape[0])]
 
                 for idx, layer in enumerate(self.ff_layers):
+                    # alpha = torch.rand(pos_acts.shape[0]).to(self.device)[:, None, None]
+                    # neg_acts = alpha * neg_acts + (1 - alpha) * neg_acts[torch.randperm(neg_acts.shape[0])]
                     pos_acts = layer(pos_acts)
                     neg_acts = layer(neg_acts)
                     layer.ff_train(pos_acts, neg_acts)
@@ -322,7 +356,7 @@ if __name__ == '__main__':
     pos_dataset = torchvision.datasets.MNIST(root='./', download=False, transform=transform, train=True)
     # pos_dataset = Subset(pos_dataset, list(range(1000)))
     # Create the data loader
-    batch_size = 64
+    batch_size = 600
     pos_dataloader = DataLoader(pos_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
 
     # Load the transformed images

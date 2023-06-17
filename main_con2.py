@@ -58,7 +58,8 @@ def goodness_score(pos_acts, neg_acts, threshold=2):
     # return torch.sum(pos_acts.pow(2) + neg_acts.pow(2) - beta*beta*torch.log((pos_acts-neg_acts).pow(2)+1e-12) - beta)
     # return torch.sum((pos_acts-neg_acts).pow(2) - torch.log((pos_acts-neg_acts).pow(2)+1e-12)) - 1
     
-    return torch.sum(pos_acts.abs() + neg_acts.abs() - torch.log((pos_acts-neg_acts).pow(2)+1e-12))
+    # return torch.sum(pos_acts.abs() + neg_acts.abs() - torch.log((pos_acts-neg_acts).pow(2)+1e-12))
+    return torch.sum(pos_acts.abs() + neg_acts.abs() + 1 / ((pos_acts-neg_acts).pow(2).sum(dim=-1)+1e-6))
 
 def get_metrics(preds, labels):
     acc = accuracy_score(labels, preds)

@@ -27,9 +27,9 @@ def goodness_score(pos_acts, neg_acts, mix_acts, threshold=2):
     quantity but without the threshold subtraction
     """
 
-    # pos_goodness = -torch.sum(torch.pow(pos_acts, 2)) + threshold
-    # neg_goodness = torch.sum(torch.pow(neg_acts, 2)) - threshold
-    # return torch.add(pos_goodness, neg_goodness)
+    pos_goodness = -torch.sum(torch.pow(pos_acts, 2)) + threshold
+    neg_goodness = torch.sum(torch.pow(mix_acts, 2)) - threshold
+    return torch.add(pos_goodness, neg_goodness)
     # return -torch.log(torch.pow(pos_acts-neg_acts, 2)+1e-3).sum()
     # return -torch.sum(pos_acts * (torch.log(pos_acts+1e-3) - torch.log(neg_acts+1e-3)))
     # return - torch.sum(torch.exp(pos_acts)*(pos_acts - neg_acts)) \
